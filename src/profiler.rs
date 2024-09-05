@@ -355,11 +355,17 @@ impl GpuProfiler {
 
             assert!(num_resolved_queries < num_used_queries);
 
+            let desired_offset = (num_resolved_queries * wgpu::QUERY_SIZE) as usize;
+            let offset = nearest_multiple_larger_than_x(
+                desired_offset,
+                wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT as _,
+            );
+
             encoder.resolve_query_set(
                 &query_pool.query_set,
                 num_resolved_queries..num_used_queries,
                 &query_pool.resolve_buffer,
-                (num_resolved_queries * wgpu::QUERY_SIZE) as u64,
+                offset as u64,
             );
             query_pool
                 .num_resolved_queries
@@ -370,7 +376,7 @@ impl GpuProfiler {
                 0,
                 &query_pool.read_buffer,
                 0,
-                (num_used_queries * wgpu::QUERY_SIZE) as u64,
+                offset as u64,
             );
         }
     }
@@ -832,10 +838,29 @@ pub struct QueryPool {
     num_resolved_queries: AtomicU32,
 }
 
+pub fn nearest_multiple_larger_than_x(x: usize, n: usize) -> usize {
+    let remainder = x % n;
+    if remainder == 0 {
+        x
+    } else {
+        let higher_distance = n - remainder;
+        x + higher_distance
+    }
+}
+
 impl QueryPool {
     const MIN_CAPACITY: u32 = 32;
 
     fn new(capacity: u32, device: &wgpu::Device) -> Self {
+        let r = wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT as u32 / wgpu::QUERY_SIZE;
+        let desired_size = wgpu::QUERY_SIZE * (capacity + r);
+
+        let size = nearest_multiple_larger_than_x(
+            desired_size as _,
+            wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT as _,
+        );
+        let size = size as u64;
+
         QueryPool {
             query_set: device.create_query_set(&wgpu::QuerySetDescriptor {
                 label: Some("GpuProfiler - Query Set"),
@@ -845,14 +870,14 @@ impl QueryPool {
 
             resolve_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("GpuProfiler - Query Resolve Buffer"),
-                size: (wgpu::QUERY_SIZE * capacity) as u64,
+                size,
                 usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             }),
 
             read_buffer: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("GpuProfiler - Query Read Buffer"),
-                size: (wgpu::QUERY_SIZE * capacity) as u64,
+                size,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             }),
